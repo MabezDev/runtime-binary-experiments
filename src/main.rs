@@ -6,8 +6,12 @@ extern crate stm32l432xx_hal as hal;
 
 use cortex_m_rt::entry;
 
+#[link_section = ".app_section.data"]
+static mut APPLICATION_RAM: [u8; 24 * 1024] = [0u8; 24 * 1024];
+
 #[entry]
 fn main() -> ! {
+    let _app_addr = unsafe { &APPLICATION_RAM as *const _ } as usize;
     // setup serial
 
     // listen for start bytes
@@ -25,7 +29,6 @@ fn main() -> ! {
     // let code: extern "C" fn(*const Table) -> u32 = ::core::mem::transmute(ptr);
     // excute the function
     // let result = code(&t);
-
     loop {
         // your code goes here
     }
