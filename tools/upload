@@ -15,7 +15,7 @@ def chunks(l, n):
 
 file = sys.argv[2]
 contents = open(file, "rb").read()
-s = serial.Serial(sys.argv[1], 9600, timeout=1.0)
+s = serial.Serial(sys.argv[1], 11520, timeout=1.0)
 s.read()
 s.write("\rload\r".format(len(contents)).encode("ascii"))
 check = s.read(size=10)
