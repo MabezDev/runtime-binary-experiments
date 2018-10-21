@@ -84,6 +84,9 @@ fn main() -> ! {
     };
     let context = &mut context;
 
+
+    // the binary will be sent as two ascii encoded bytes i.e 1 to F, anything outside this range will finish the loading
+    // making a range of 0x01 to 0xFF 
     loop {
 
         for _b in b"\rload\r" {
@@ -171,34 +174,36 @@ fn main() -> ! {
             }
             i = i + 1;
         }
-
-        // read in the binary
-        // the binary will be sent as two ascii encoded bytes i.e 1 to F, anything outside this range will finish the loading
-        // making a range of 0x01 to 0xFF 
-
-        // convert the first 4 bytes into a ffi function pointer
+        
         unsafe {
-            let addr = ((APPLICATION_RAM[3] as u32) << 24)
+            // convert 4 bytes into a ffi function pointer
+            let setup_addr = ((APPLICATION_RAM[3] as u32) << 24)
                     | ((APPLICATION_RAM[2] as u32) << 16)
                     | ((APPLICATION_RAM[1] as u32) << 8)
                     | ((APPLICATION_RAM[0] as u32) << 0);
-            let ptr = addr as *const ();
+            // convert 4 bytes into a ffi function pointer
+            let update_addr = ((APPLICATION_RAM[7] as u32) << 24)
+                    | ((APPLICATION_RAM[6] as u32) << 16)
+                    | ((APPLICATION_RAM[5] as u32) << 8)
+                    | ((APPLICATION_RAM[4] as u32) << 0);
+            let setup_ptr = setup_addr as *const ();
+            let update_ptr = update_addr as *const ();
 
-            // struct callbacks_t {
-            //     void* p_context;
-            //     int32_t(*puts)(void* p_context, const char*);
-            // };
-            writeln!(hstdout, "Loaded {} bytes into buffer at {:08X}. Will execute at {:08X}.", i, app_addr, addr).unwrap();
+            writeln!(hstdout, "Loaded {} bytes into buffer at {:08X}. ", i, app_addr).unwrap();
+            writeln!(hstdout, "Will execute setup at {:08X}.",setup_addr);
+            writeln!(hstdout, "Will execute update at {:08X}.",update_addr);
             context.display.clear();
             let t = Table {
                 context: context as *mut Context,
                 draw_pixel: draw_pixel,
             };
-            let code: extern "C" fn(*const Table) -> u32 = ::core::mem::transmute(ptr);
-            // excute the function
-            let result = code(&t);
-
-            writeln!(hstdout, "Result of execution {}", result);
+            let setup: extern "C" fn(*const Table) -> u32 = ::core::mem::transmute(setup_ptr);
+            let update: extern "C" fn(*const Table) -> u32 = ::core::mem::transmute(update_ptr);
+            // excute the function to 'load the app'
+            let result = setup(&t);
+            writeln!(hstdout, "Result of setup {}", result);
+            let result = update(&t); // call this repeatedly to give processing time to the app
+            writeln!(hstdout, "Result of update {}", result);
         }
     }
 }
