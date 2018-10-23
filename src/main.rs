@@ -11,19 +11,26 @@ use crate::hal::prelude::*;
 use crate::hal::serial::Serial;
 use crate::hal::stm32l4::stm32l4x2;
 
+use ssd1351::builder::Builder;
+use ssd1351::mode::{GraphicsMode};
+use ssd1351::prelude::*;
+
+use crate::hal::delay::Delay;
+use crate::hal::spi::Spi;
+
+
 use cortex_m_rt::{entry, exception, ExceptionFrame};
 use core::fmt::Write;
 
 #[link_section = ".app_section.data"]
 static mut APPLICATION_RAM: [u8; 32 * 1024] = [0u8; 32 * 1024];
-static mut WRITE_BUFFER: [u8; 128] = [0u8; 128];
+
+use mabez_watch_sdk_core::{Table, Context};
 
 #[exception]
 fn HardFault(ef: &ExceptionFrame) -> ! {
     panic!("{:#?}", ef);
 }
-
-pub struct Context {}
 
 #[entry]
 fn main() -> ! {
@@ -31,20 +38,54 @@ fn main() -> ! {
     let app_addr = unsafe { &APPLICATION_RAM as *const _ } as usize;
     
     let p = stm32l4x2::Peripherals::take().unwrap();
-    let mut context = Context {};
-    let context = &mut context;
+    let cp = cortex_m::Peripherals::take().unwrap();
     let mut flash = p.FLASH.constrain();
     let mut rcc = p.RCC.constrain();
     let mut gpioa = p.GPIOA.split(&mut rcc.ahb2);
+    let mut gpiob = p.GPIOB.split(&mut rcc.ahb2);
 
     let clocks = rcc.cfgr.sysclk(80.mhz()).pclk1(80.mhz()).pclk2(80.mhz()).freeze(&mut flash.acr);
 
     let tx = gpioa.pa9.into_af7(&mut gpioa.moder, &mut gpioa.afrh);
     let rx = gpioa.pa10.into_af7(&mut gpioa.moder, &mut gpioa.afrh);
 
-    let serial = Serial::usart1(p.USART1, (tx, rx), 9_600.bps(), clocks, &mut rcc.apb2);
+    let mut delay = Delay::new(cp.SYST, clocks);
+    let mut rst = gpiob
+        .pb0
+        .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
+
+    let dc = gpiob
+        .pb1
+        .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
+
+    let sck = gpioa.pa5.into_af5(&mut gpioa.moder, &mut gpioa.afrl);
+    let miso = gpioa.pa6.into_af5(&mut gpioa.moder, &mut gpioa.afrl);
+    let mosi = gpioa.pa7.into_af5(&mut gpioa.moder, &mut gpioa.afrl);
+
+    let spi = Spi::spi1(
+        p.SPI1,
+        (sck, miso, mosi),
+        SSD1351_SPI_MODE,
+        2.mhz(), // TODO increase this when off the breadboard!
+        clocks,
+        &mut rcc.apb2,
+    );
+
+    let mut display: GraphicsMode<_> = Builder::new().connect_spi(spi, dc).into();
+    display.reset(&mut rst, &mut delay);
+    display.init().unwrap();
+
+    let serial = Serial::usart1(p.USART1, (tx, rx), 11520.bps(), clocks, &mut rcc.apb2);
     let (mut tx, mut rx) = serial.split();
 
+    let mut context = Context {
+        display: display
+    };
+    let context = &mut context;
+
+
+    // the binary will be sent as two ascii encoded bytes i.e 1 to F, anything outside this range will finish the loading
+    // making a range of 0x01 to 0xFF 
     loop {
 
         for _b in b"\rload\r" {
@@ -132,56 +173,44 @@ fn main() -> ! {
             }
             i = i + 1;
         }
-
-        // read in the binary
-        // the binary will be sent as two ascii encoded bytes i.e 1 to F, anything outside this range will finish the loading
-        // making a range of 0x01 to 0xFF 
-
-        // convert the first 4 bytes into a ffi function pointer
+        
         unsafe {
-            let addr = ((APPLICATION_RAM[3] as u32) << 24)
+            // convert 4 bytes into a ffi function pointer
+            let setup_addr = ((APPLICATION_RAM[3] as u32) << 24)
                     | ((APPLICATION_RAM[2] as u32) << 16)
                     | ((APPLICATION_RAM[1] as u32) << 8)
                     | ((APPLICATION_RAM[0] as u32) << 0);
-            let ptr = addr as *const ();
+            // convert 4 bytes into a ffi function pointer
+            let update_addr = ((APPLICATION_RAM[7] as u32) << 24)
+                    | ((APPLICATION_RAM[6] as u32) << 16)
+                    | ((APPLICATION_RAM[5] as u32) << 8)
+                    | ((APPLICATION_RAM[4] as u32) << 0);
+            let setup_ptr = setup_addr as *const ();
+            let update_ptr = update_addr as *const ();
 
-            // struct callbacks_t {
-            //     void* p_context;
-            //     int32_t(*puts)(void* p_context, const char*);
-            // };
-            writeln!(hstdout, "Loaded {} bytes into buffer at {:08X}. Will execute at {:08X}.", i, app_addr, addr).unwrap();
-
-            #[repr(C)]
-            struct Table {
-                context: *mut Context,
-                puts: extern "C" fn(*mut Context, *const u8) -> i32,
-            };
+            writeln!(hstdout, "Loaded {} bytes into buffer at {:08X}. ", i, app_addr).unwrap();
+            writeln!(hstdout, "Will execute setup at {:08X}.",setup_addr);
+            writeln!(hstdout, "Will execute update at {:08X}.",update_addr);
+            context.display.clear();
             let t = Table {
                 context: context as *mut Context,
-                puts: puts,
+                draw_pixel: draw_pixel,
             };
-            let code: extern "C" fn(*const Table) -> u32 = ::core::mem::transmute(ptr);
-            // excute the function
-            let result = code(&t);
-
-            writeln!(hstdout, "Result of execution {}", result);
-            for i in 0..WRITE_BUFFER.len() {
-                if WRITE_BUFFER[i] != 0 {
-                    write!(hstdout, "{}", WRITE_BUFFER[i] as char);
-                }
-            }
+            let setup: extern "C" fn(*const Table) -> u32 = ::core::mem::transmute(setup_ptr);
+            let update: extern "C" fn(*const Table) -> u32 = ::core::mem::transmute(update_ptr);
+            // excute the function to 'load the app'
+            let result = setup(&t);
+            writeln!(hstdout, "Result of setup {}", result);
+            let result = update(&t); // call this repeatedly to give processing time to the app
+            writeln!(hstdout, "Result of update {}", result);
         }
     }
 }
 
-pub(crate) extern "C" fn puts(_raw_ctx: *mut Context, s: *const u8) -> i32 {
-    let mut i = 0;
-    unsafe {
-        while *s.offset(i) != 0 {
-            let ch: u8 = *s.offset(i);
-            WRITE_BUFFER[i as usize] = ch;
-            i += 1;
-        }
-    }
+pub(crate) extern "C" fn draw_pixel(context: *mut Context, x: u8, y: u8, colour: u16) -> i32 {
+    let ctx = unsafe {
+        &mut *context
+    };
+    ctx.display.set_pixel(x as u32, y as u32, colour);
     0
 }

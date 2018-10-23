@@ -42,7 +42,7 @@
                 "set print asm-demangle on",
                 "monitor arm semihosting enable",
                 "load",
-                // "break main",
+                "break main",
                 "step"
             ]
         },
