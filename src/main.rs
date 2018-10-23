@@ -25,7 +25,7 @@ use core::fmt::Write;
 #[link_section = ".app_section.data"]
 static mut APPLICATION_RAM: [u8; 32 * 1024] = [0u8; 32 * 1024];
 
-use mabez_watch_sdk_core::{Table, Context};
+use mwatch_sdk_core::{Table, Context};
 
 #[exception]
 fn HardFault(ef: &ExceptionFrame) -> ! {
