@@ -6,7 +6,6 @@ extern crate panic_semihosting; // logs messages to the host stderr; requires a 
 extern crate nb;
 extern crate stm32l432xx_hal as hal;
 extern crate cortex_m_semihosting as sh;
-extern crate embedded_graphics;
 
 use crate::hal::prelude::*;
 use crate::hal::serial::Serial;
